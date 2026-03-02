@@ -1,0 +1,9 @@
+{
+  "name": "LoopMeet",
+  "description": "Professional meeting recorder with AI transcription, summarization, and ticket extraction.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ]
+}
