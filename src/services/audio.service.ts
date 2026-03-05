@@ -26,6 +26,7 @@ export class AudioService {
 
   devices = signal<AudioDevice[]>([]);
   isRecording = signal(false);
+  isRecordingVideo = signal(false);
   isFinalizing = signal(false);
   finalizeReason = signal<string | null>(null);
   recordingTime = signal(0);
@@ -168,10 +169,15 @@ export class AudioService {
           console.warn('System audio not shared. Proceeding with video only.');
         }
 
-      } catch (err) {
+      } catch (err: any) {
         console.error('System monitor setup failed', err);
         // Ensure we clean up any partial stream
         this.stopSystemMonitor(); 
+        
+        // Don't throw if it's just a permission denied, let the caller handle it gracefully
+        if (err.name === 'NotAllowedError') {
+           throw err;
+        }
         throw err;
       } finally {
         this.isInitializingSystem = false;
@@ -285,7 +291,7 @@ export class AudioService {
     
     // 1. Prepare System Stream if needed (check existing)
     // We pass true to stopMonitoring so it doesn't kill the existing sysStream
-    const existingSysStream = (includeSystemAudio && this.sysStream?.active) ? this.sysStream : null;
+    const existingSysStream = ((includeSystemAudio || recordVideo) && this.sysStream?.active) ? this.sysStream : null;
     
     this.stopMonitoring(!!existingSysStream); 
     
@@ -314,7 +320,7 @@ export class AudioService {
         source.connect(this.streamDestination); // To Output
         source.connect(this.micAnalyser); // To Mic Meter
       } catch (e) {
-        console.error(`Failed to add mic ${id}`, e);
+        console.error(`[AudioService] Failed to add mic ${id}`, e);
       }
     }
 
@@ -327,12 +333,16 @@ export class AudioService {
       // If we didn't have it (skipped setup), try to get it now
       if (!streamToUse) {
         try {
+          console.log('[AudioService] Requesting display media...');
           streamToUse = await navigator.mediaDevices.getDisplayMedia({
             video: true,
             audio: includeSystemAudio
           });
-        } catch (err) {
-          console.error('System audio/video request failed', err);
+        } catch (err: any) {
+          console.error('[AudioService] System audio/video request failed', err);
+          if (err.name === 'NotAllowedError') {
+             throw new Error('Permission to share screen was denied.');
+          }
           throw new Error('Could not start video source. Please ensure you granted permission to share your screen.');
         }
       }
@@ -343,36 +353,44 @@ export class AudioService {
         // Failsafe: detect if stream ends unexpectedly
         streamToUse.getTracks().forEach(track => {
           track.onended = () => {
-            console.warn(`Track ${track.kind} ended unexpectedly. Finalizing recording...`);
+            console.warn(`[AudioService] Track ${track.kind} ended unexpectedly. Finalizing recording...`);
             this.finalizeRecording('display_track_ended');
           };
           if ('oninactive' in track) {
             (track as any).oninactive = () => {
-              console.warn(`Track ${track.kind} inactive. Finalizing recording...`);
+              console.warn(`[AudioService] Track ${track.kind} inactive. Finalizing recording...`);
               this.finalizeRecording('display_track_inactive');
             };
           }
         });
 
         (streamToUse as any).oninactive = () => {
-          console.warn(`Display stream inactive. Finalizing recording...`);
+          console.warn(`[AudioService] Display stream inactive. Finalizing recording...`);
           this.finalizeRecording('display_stream_inactive');
         };
         
         if (includeSystemAudio) {
           const sysAudioTrack = streamToUse.getAudioTracks()[0];
           if (sysAudioTrack) {
+            console.log('[AudioService] Mixing system audio track');
             // Mix audio
             const sysSource = this.audioContext.createMediaStreamSource(new MediaStream([sysAudioTrack]));
             sysSource.connect(this.streamDestination); // To Output
             if (this.sysAnalyser) {
               sysSource.connect(this.sysAnalyser); // To Sys Meter
             }
+          } else {
+            console.warn('[AudioService] System audio requested but no audio track found in display stream.');
           }
         }
 
         if (recordVideo) {
           videoTrack = streamToUse.getVideoTracks()[0];
+          if (videoTrack) {
+            console.log('[AudioService] Video track captured:', videoTrack.label);
+          } else {
+            console.warn('[AudioService] Video recording requested but no video track found in display stream.');
+          }
         }
       }
     }
@@ -387,13 +405,31 @@ export class AudioService {
       // Audio track from mixer + Video track from screen
       const mixedAudioTrack = this.streamDestination.stream.getAudioTracks()[0];
       finalStream = new MediaStream([videoTrack, mixedAudioTrack]);
+      console.log('[AudioService] Mixed video and audio tracks for recording');
     }
 
     console.log(`[AudioService] Starting MediaRecorder with mimeType: ${mimeType}`);
-    this.mediaRecorder = new MediaRecorder(finalStream, { mimeType });
+    try {
+      this.mediaRecorder = new MediaRecorder(finalStream, { mimeType });
+    } catch (e) {
+      console.error(`[AudioService] Failed to create MediaRecorder with ${mimeType}, falling back...`, e);
+      this.mediaRecorder = new MediaRecorder(finalStream);
+    }
     
     this.mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) this.chunks.push(e.data);
+    };
+
+    this.mediaRecorder.onerror = (e) => {
+      console.error('[AudioService] MediaRecorder error:', e);
+    };
+
+    this.mediaRecorder.onstart = () => {
+      console.log(`[AudioService] MediaRecorder started. Actual mimeType: ${this.mediaRecorder?.mimeType}`);
+    };
+
+    this.mediaRecorder.onstop = () => {
+      console.log('[AudioService] MediaRecorder stopped');
     };
 
     this.mediaRecorder.start(1000); 
@@ -438,25 +474,26 @@ export class AudioService {
   };
 
   stopRecording(isExpectedVideo: boolean): Promise<Blob> {
+    const mimeType = this.mediaRecorder?.mimeType || (isExpectedVideo ? 'video/webm' : 'audio/webm');
     return new Promise((resolve) => {
       if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
-        resolve(new Blob(this.chunks, { type: isExpectedVideo ? 'video/webm' : 'audio/webm' }));
+        console.log(`[AudioService] stopRecording: MediaRecorder is already inactive. Chunks: ${this.chunks.length}`);
+        resolve(new Blob(this.chunks, { type: mimeType }));
         return;
       }
 
       // Fallback timeout in case onstop doesn't fire
       const fallbackTimeout = setTimeout(() => {
-        console.warn('MediaRecorder onstop timeout. Resolving with current chunks.');
-        const type = isExpectedVideo ? 'video/webm' : 'audio/webm';
-        const blob = new Blob(this.chunks, { type });
+        console.warn('[AudioService] MediaRecorder onstop timeout. Resolving with current chunks.');
+        const blob = new Blob(this.chunks, { type: mimeType });
         this.cleanup();
         resolve(blob);
       }, 5000);
 
       this.mediaRecorder.onstop = () => {
         clearTimeout(fallbackTimeout);
-        const type = isExpectedVideo ? 'video/webm' : 'audio/webm';
-        const blob = new Blob(this.chunks, { type });
+        console.log(`[AudioService] MediaRecorder onstop fired. Chunks: ${this.chunks.length}, Final Type: ${mimeType}`);
+        const blob = new Blob(this.chunks, { type: mimeType });
         this.cleanup();
         resolve(blob);
       };
@@ -485,6 +522,7 @@ export class AudioService {
     const duration = this.recordingTime();
     
     const blob = await this.stopRecording(isVideo);
+    console.log(`[AudioService] Finalized recording. Blob size: ${blob.size}, type: ${blob.type}`);
     
     if (meetingId) {
       // Update status to finalizing

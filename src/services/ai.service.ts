@@ -327,7 +327,8 @@ export class AiService {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
-        const base64String = (reader.result as string).split(',')[1];
+        const resultStr = reader.result as string;
+        const base64String = resultStr.substring(resultStr.indexOf(',') + 1);
         resolve(base64String);
       };
       reader.onerror = reject;

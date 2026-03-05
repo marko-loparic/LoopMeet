@@ -283,10 +283,12 @@ export class RecordComponent implements OnInit, OnDestroy {
 
     try {
        this.useSystem = isChecked;
-       // We don't actually need to toggle the monitor here if we're just going to use it for recording
-       // But if we want to show levels, we can try to get it.
-       // The issue is that getDisplayMedia requires a user gesture, and sometimes this async flow breaks it.
-       // Let's just set the flag and get the media when recording starts.
+       
+       // Auto-enable video when screen share is enabled
+       if (isChecked) {
+         this.useVideo = true;
+       }
+
        if (isChecked) {
          await this.audioService.toggleSystemMonitor(isChecked);
        } else {
@@ -295,6 +297,7 @@ export class RecordComponent implements OnInit, OnDestroy {
     } catch (e: any) {
        console.error(e);
        this.useSystem = false; // Revert toggle if failed
+       this.useVideo = false;
        event.target.checked = false;
        
        // Only alert if it's not a user cancellation
@@ -333,7 +336,12 @@ export class RecordComponent implements OnInit, OnDestroy {
       );
     } catch (e: any) {
       console.error('Failed to start recording', e);
-      alert(`Failed to start recording: ${e.message || 'Unknown error'}`);
+      if (e.message === 'Permission to share screen was denied.') {
+        this.useSystem = false;
+        this.useVideo = false;
+      } else {
+        alert(`Failed to start recording: ${e.message || 'Unknown error'}`);
+      }
       // Clean up the pre-created meeting if we failed to start
       await this.db.deleteMeeting(id);
       this.currentMeetingId = null;

@@ -1,7 +1,7 @@
 import { Component, OnInit, inject, signal, computed, effect, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { DbService, Meeting, Project, Ticket, User, AIJob, MeetingSpeakerMap } from '../../services/db.service';
 import { AiService } from '../../services/ai.service';
 import { DomSanitizer, SafeUrl } from '@angular/platform-browser';
@@ -57,6 +57,11 @@ interface TranscriptSegment {
                  <button (click)="exportJson()" class="inline-flex items-center p-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50" title="Export JSON">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                 </button>
+                 <button (click)="deleteMeeting()" class="inline-flex items-center p-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-red-600 bg-white hover:bg-red-50" title="Delete Meeting">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                  </button>
                </div>
@@ -772,6 +777,7 @@ interface TranscriptSegment {
 })
 export class MeetingComponent implements OnInit {
   route = inject(ActivatedRoute);
+  router = inject(Router);
   db = inject(DbService);
   ai = inject(AiService);
   sanitizer = inject(DomSanitizer);
@@ -1434,6 +1440,15 @@ export class MeetingComponent implements OnInit {
     this.closeModal();
   }
 
+
+  async deleteMeeting() {
+    const m = this.meeting();
+    if (!m) return;
+    if (confirm(`Are you sure you want to delete "${m.title}"? This will also delete the recording and transcript.`)) {
+      await this.db.deleteMeeting(m.id);
+      this.router.navigate(['/dashboard']);
+    }
+  }
 
   async regenerateAI() {
     if (!this.meeting() || !this.meeting()?.transcript || !this.rawAudioBlob) return;

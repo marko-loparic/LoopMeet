@@ -146,12 +146,19 @@ declare const GEMINI_API_KEY: string;
                     </div>
 
                     <div class="ml-2 flex-shrink-0 flex flex-col items-end">
-                      @if (item.type === 'meeting') {
-                        <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                          {{ formatDuration(item.duration) }}
-                        </p>
-                      }
-                      <p class="mt-1 text-xs text-gray-500">
+                      <div class="flex items-center gap-2 mb-1">
+                        @if (item.type === 'meeting') {
+                          <p class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            {{ formatDuration(item.duration) }}
+                          </p>
+                        }
+                        <button (click)="deleteItem(item, $event)" class="text-gray-400 hover:text-red-600 transition-colors" title="Delete">
+                          <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                      <p class="text-xs text-gray-500">
                         {{ item.date | date:'short' }}
                       </p>
                     </div>
@@ -716,6 +723,31 @@ export class DashboardComponent implements OnInit {
     this.loadData();
     this.availableProjects.set(await this.db.getAllProjects());
     this.users.set(await this.db.getAllUsers());
+  }
+
+  async deleteItem(item: any, event: Event) {
+    event.stopPropagation();
+    const type = item.type;
+    const title = item.title || item.subject || 'this item';
+    
+    if (!confirm(`Are you sure you want to delete ${title}?`)) {
+      return;
+    }
+
+    try {
+      if (type === 'meeting') {
+        await this.db.deleteMeeting(item.id);
+      } else if (type === 'email') {
+        await this.db.deleteEmail(item.id);
+      } else if (type === 'message') {
+        await this.db.deleteMessage(item.id);
+      }
+      
+      await this.loadData();
+    } catch (e) {
+      console.error('Delete failed', e);
+      alert('Failed to delete item.');
+    }
   }
 
   async loadData() {
